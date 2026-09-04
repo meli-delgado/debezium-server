@@ -68,6 +68,7 @@
         <module>debezium-server-redis</module>
         <module>debezium-server-dist</module>
         <module>debezium-server-kafka</module>
+        <module>debezium-server-libstreaming</module>
         <module>debezium-server-pravega</module>
         <module>debezium-server-nats-streaming</module>
         <module>debezium-server-nats-jetstream</module>

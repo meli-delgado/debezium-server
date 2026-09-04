@@ -1,0 +1,23 @@
+debezium.sink.type=libstreaming
+debezium.sink.libstreaming.stream.id=<CHANGEME>
+debezium.sink.libstreaming.streaming.instance=<CHANGEME>
+debezium.sink.libstreaming.datacenter=us1.staging.dog
+debezium.sink.libstreaming.lane.type=default
+
+debezium.source.connector.class=io.debezium.connector.postgresql.PostgresConnector
+debezium.source.database.hostname=<CHANGEME>
+debezium.source.database.port=5432
+debezium.source.database.user=<CHANGEME>
+debezium.source.database.password=<CHANGEME>
+debezium.source.database.dbname=<CHANGEME>
+debezium.source.database.server.name=<CHANGEME>
+debezium.source.database.tcpKeepAlive=true
+debezium.source.plugin.name=pgoutput
+debezium.source.table.include.list=<CHANGEME>
+debezium.source.topic.prefix=<CHANGEME>
+
+# Keep processed LSN/offsets in memory only, not on Kafka or disk.
+debezium.source.offset.storage=org.apache.kafka.connect.storage.MemoryOffsetBackingStore
+debezium.source.offset.flush.interval.ms=0
+
+quarkus.log.console.json=false
