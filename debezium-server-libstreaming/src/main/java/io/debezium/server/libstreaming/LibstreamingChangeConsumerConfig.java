@@ -5,6 +5,9 @@
  */
 package io.debezium.server.libstreaming;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import org.apache.kafka.common.config.ConfigDef;
 
 import io.debezium.config.Configuration;
@@ -16,11 +19,21 @@ import io.debezium.config.Field;
 public class LibstreamingChangeConsumerConfig {
 
     public static final Field STREAM_ID = Field.create("stream.id")
-            .withDisplayName("Stream id")
+            .withDisplayName("Default stream id")
             .withType(ConfigDef.Type.STRING)
             .withWidth(ConfigDef.Width.MEDIUM)
             .withImportance(ConfigDef.Importance.HIGH)
-            .withDescription("The libstreaming stream id to publish change events to.");
+            .withDescription("The libstreaming stream id to publish change events to when a source table has no entry in stream.id.routes.");
+
+    public static final Field STREAM_ID_ROUTES = Field.create("stream.id.routes")
+            .withDisplayName("Per-table stream id routes")
+            .withType(ConfigDef.Type.STRING)
+            .withDefault("")
+            .withWidth(ConfigDef.Width.LONG)
+            .withImportance(ConfigDef.Importance.MEDIUM)
+            .withDescription("Comma-separated list of destination=streamId pairs (e.g. myserver.public.orders=orders-stream) "
+                    + "routing a source table's change events to a specific libstreaming stream. "
+                    + "A destination without a match here falls back to stream.id.");
 
     public static final Field STREAMING_INSTANCE = Field.create("streaming.instance")
             .withDisplayName("Streaming instance")
@@ -61,6 +74,7 @@ public class LibstreamingChangeConsumerConfig {
             .withDescription("Timeout in milliseconds to wait for the StreamProducer to pull in its initial assignments on startup.");
 
     private final String streamId;
+    private final Map<String, String> streamIdRoutes;
     private final String streamingInstance;
     private final String datacenter;
     private final String laneType;
@@ -69,6 +83,7 @@ public class LibstreamingChangeConsumerConfig {
 
     public LibstreamingChangeConsumerConfig(Configuration config) {
         this.streamId = config.getString(STREAM_ID);
+        this.streamIdRoutes = parseRoutes(config.getString(STREAM_ID_ROUTES));
         this.streamingInstance = config.getString(STREAMING_INSTANCE);
         this.datacenter = config.getString(DATACENTER);
         this.laneType = config.getString(LANE_TYPE);
@@ -76,8 +91,35 @@ public class LibstreamingChangeConsumerConfig {
         this.producerReadyTimeout = config.getInteger(PRODUCER_READY_TIMEOUT_MS);
     }
 
+    private static Map<String, String> parseRoutes(String routes) {
+        Map<String, String> parsed = new HashMap<>();
+        if (routes == null || routes.isBlank()) {
+            return parsed;
+        }
+        for (String entry : routes.split(",")) {
+            String[] destinationAndStreamId = entry.trim().split("=", 2);
+            if (destinationAndStreamId.length != 2 || destinationAndStreamId[0].isBlank() || destinationAndStreamId[1].isBlank()) {
+                throw new IllegalArgumentException("Invalid stream.id.routes entry '" + entry + "', expected format <destination>=<streamId>");
+            }
+            parsed.put(destinationAndStreamId[0].trim(), destinationAndStreamId[1].trim());
+        }
+        return parsed;
+    }
+
+    /**
+     * Resolves the libstreaming stream id a source table's change events should be published to,
+     * falling back to {@link #getStreamId()} when {@code destination} has no entry in {@code stream.id.routes}.
+     */
+    public String resolveStreamId(String destination) {
+        return streamIdRoutes.getOrDefault(destination, streamId);
+    }
+
     public String getStreamId() {
         return streamId;
+    }
+
+    public Map<String, String> getStreamIdRoutes() {
+        return streamIdRoutes;
     }
 
     public String getStreamingInstance() {

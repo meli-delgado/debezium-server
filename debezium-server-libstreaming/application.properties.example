@@ -1,5 +1,8 @@
 debezium.sink.type=libstreaming
+# Default stream for any table not listed in stream.id.routes below.
 debezium.sink.libstreaming.stream.id=<CHANGEME>
+# Per-table overrides: <topic.prefix>.<schema>.<table>=<streamId>, comma-separated.
+debezium.sink.libstreaming.stream.id.routes=<CHANGEME>.public.orders=orders-stream,<CHANGEME>.public.customers=customers-stream,<CHANGEME>.public.line_items=orders-stream
 debezium.sink.libstreaming.streaming.instance=<CHANGEME>
 debezium.sink.libstreaming.datacenter=us1.staging.dog
 debezium.sink.libstreaming.lane.type=default
@@ -13,7 +16,7 @@ debezium.source.database.dbname=<CHANGEME>
 debezium.source.database.server.name=<CHANGEME>
 debezium.source.database.tcpKeepAlive=true
 debezium.source.plugin.name=pgoutput
-debezium.source.table.include.list=<CHANGEME>
+debezium.source.table.include.list=public.orders,public.customers,public.line_items
 debezium.source.topic.prefix=<CHANGEME>
 
 # Keep processed LSN/offsets in memory only, not on Kafka or disk.

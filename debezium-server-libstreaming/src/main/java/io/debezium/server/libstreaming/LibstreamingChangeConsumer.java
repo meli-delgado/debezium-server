@@ -7,8 +7,12 @@ package io.debezium.server.libstreaming;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -52,7 +56,7 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
 
     private LibstreamingChangeConsumerConfig config;
 
-    private StreamProducer streamProducer;
+    private final Map<String, StreamProducer> streamProducersByStreamId = new HashMap<>();
 
     @PostConstruct
     void start() {
@@ -63,9 +67,19 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
 
         Libstreaming.init(new Pod("", "", "", "", "", "", ""), Observability.noop());
 
-        StreamProducerConfig.Builder streamProducerConfigBuilder = new StreamProducerConfig.Builder(config.getDatacenter());
+        Set<String> streamIds = new HashSet<>(config.getStreamIdRoutes().values());
+        streamIds.add(config.getStreamId());
 
-        streamProducer = Libstreaming.newStreamProducer(config.getStreamId(), config.getStreamingInstance(), streamProducerConfigBuilder.build());
+        for (String streamId : streamIds) {
+            streamProducersByStreamId.put(streamId, createReadyStreamProducer(streamId));
+        }
+
+        LOGGER.info("consumer started, publishing to streams {} via streaming instance '{}'", streamProducersByStreamId.keySet(), config.getStreamingInstance());
+    }
+
+    private StreamProducer createReadyStreamProducer(String streamId) {
+        StreamProducerConfig.Builder streamProducerConfigBuilder = new StreamProducerConfig.Builder(config.getDatacenter());
+        StreamProducer streamProducer = Libstreaming.newStreamProducer(streamId, config.getStreamingInstance(), streamProducerConfigBuilder.build());
 
         try {
             streamProducer.isReady().get(config.getProducerReadyTimeout(), TimeUnit.MILLISECONDS);
@@ -75,16 +89,16 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
             throw new DebeziumException(e);
         }
         catch (ExecutionException | TimeoutException e) {
-            throw new DebeziumException("StreamProducer did not become ready for stream '" + config.getStreamId() + "'", e);
+            throw new DebeziumException("StreamProducer did not become ready for stream '" + streamId + "'", e);
         }
 
-        LOGGER.info("consumer started, publishing to stream '{}' via streaming instance '{}'", config.getStreamId(), config.getStreamingInstance());
+        return streamProducer;
     }
 
     @PreDestroy
     void stop() {
         LOGGER.info("consumer destroyed...");
-        if (streamProducer != null) {
+        for (StreamProducer streamProducer : streamProducersByStreamId.values()) {
             try {
                 streamProducer.close();
             }
@@ -100,11 +114,16 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
             throws InterruptedException {
 
         final List<CompletableFuture<Void>> deliveryFutures = new ArrayList<>(records.size());
+        final List<String> resolvedStreamIds = new ArrayList<>(records.size());
 
         for (ChangeEvent<Object, Object> record : records) {
             try {
                 LOGGER.trace("Received event '{}'", record);
                 Headers headers = convertToLibstreamingHeaders(record);
+
+                String streamId = config.resolveStreamId(record.destination());
+                resolvedStreamIds.add(streamId);
+                StreamProducer streamProducer = streamProducersByStreamId.get(streamId);
 
                 deliveryFutures.add(streamProducer.write(config.getLaneType(), getBytes(record.key()), ByteBuffer.wrap(getBytes(record.value())), Optional.of(headers),
                         Optional.empty()));
@@ -127,7 +146,7 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
                         deliveryFuture.get(config.getWaitMessageDeliveryTimeout(), TimeUnit.MILLISECONDS);
                     }
                     catch (TimeoutException e) {
-                        LOGGER.error("Timed out while waiting to publish a record with key '{}' to stream '{}'", asString(record.key()), config.getStreamId());
+                        LOGGER.error("Timed out while waiting to publish a record with key '{}' to stream '{}'", asString(record.key()), resolvedStreamIds.get(i));
                         throw new DebeziumException(e);
                     }
                 }
