@@ -64,7 +64,7 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
         io.debezium.config.Configuration configuration = io.debezium.config.Configuration.from(getConfigSubset(mpConfig, PROP_PREFIX));
         this.config = new LibstreamingChangeConsumerConfig(configuration);
 
-        Libstreaming.init(podFromEnv(), Observability.noop());
+        Libstreaming.init(podFromEnv(), Observability.dogstatsdUnix(Observability.Level.INFO, "/var/run/datadog-agent/statsd.sock"));
 
         Set<String> streamIds = new HashSet<>(config.getStreamIdRoutes().values());
         streamIds.add(config.getStreamId());
