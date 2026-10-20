@@ -73,7 +73,9 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
             streamProducersByStreamId.put(streamId, createReadyStreamProducer(streamId));
         }
 
-        LOGGER.info("consumer started, publishing to streams {} via streaming instance '{}'", streamProducersByStreamId.keySet(), config.getStreamingInstance());
+        LOGGER.info("consumer started, publishing to streams {} via streaming instance '{}' across shards {}", streamProducersByStreamId.keySet(),
+                config.getStreamingInstance(),
+                config.getShardIds());
     }
 
     // Values are injected through the Kubernetes Downward API; unset vars fall back to "" as libstreaming expects.
@@ -140,7 +142,9 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
                 resolvedStreamIds.add(streamId);
                 StreamProducer streamProducer = streamProducersByStreamId.get(streamId);
 
-                deliveryFutures.add(streamProducer.write(getBytes(record.value()), config.getLaneType(), Optional.of(headers), Optional.empty(), Optional.empty()));
+                Optional<String> shardId = config.resolveShardId(record.key() == null ? null : getBytes(record.key()));
+
+                deliveryFutures.add(streamProducer.write(getBytes(record.value()), config.getLaneType(), Optional.of(headers), Optional.empty(), shardId));
             }
             catch (Exception e) {
                 throw new DebeziumException(e);

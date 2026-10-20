@@ -5,8 +5,11 @@
  */
 package io.debezium.server.libstreaming;
 
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.apache.kafka.common.config.ConfigDef;
 
@@ -57,6 +60,16 @@ public class LibstreamingChangeConsumerConfig {
             .withImportance(ConfigDef.Importance.MEDIUM)
             .withDescription("The traffic lane type to write change events to.");
 
+    public static final Field SHARD_IDS = Field.create("shard.ids")
+            .withDisplayName("Shard ids")
+            .withType(ConfigDef.Type.STRING)
+            .withDefault("")
+            .withWidth(ConfigDef.Width.MEDIUM)
+            .withImportance(ConfigDef.Importance.MEDIUM)
+            .withDescription("Comma-separated shard ids shared by every target stream (e.g. 0,1,2). Each change event is written to the shard "
+                    + "picked by hashing its key, so all changes to a row land on the same shard. When empty, or for events without a key, "
+                    + "events are written unsharded.");
+
     public static final Field WAIT_MESSAGE_DELIVERY_TIMEOUT_MS = Field.create("wait.message.delivery.timeout.ms")
             .withDisplayName("Wait message delivery timeout (ms)")
             .withType(ConfigDef.Type.INT)
@@ -78,6 +91,7 @@ public class LibstreamingChangeConsumerConfig {
     private final String streamingInstance;
     private final String datacenter;
     private final String laneType;
+    private final List<String> shardIds;
     private final int waitMessageDeliveryTimeout;
     private final int producerReadyTimeout;
 
@@ -87,6 +101,7 @@ public class LibstreamingChangeConsumerConfig {
         this.streamingInstance = config.getString(STREAMING_INSTANCE);
         this.datacenter = config.getString(DATACENTER);
         this.laneType = config.getString(LANE_TYPE);
+        this.shardIds = parseShardIds(config.getString(SHARD_IDS));
         this.waitMessageDeliveryTimeout = config.getInteger(WAIT_MESSAGE_DELIVERY_TIMEOUT_MS);
         this.producerReadyTimeout = config.getInteger(PRODUCER_READY_TIMEOUT_MS);
     }
@@ -104,6 +119,28 @@ public class LibstreamingChangeConsumerConfig {
             parsed.put(destinationAndStreamId[0].trim(), destinationAndStreamId[1].trim());
         }
         return parsed;
+    }
+
+    private static List<String> parseShardIds(String shardIds) {
+        if (shardIds == null || shardIds.isBlank()) {
+            return List.of();
+        }
+        List<String> parsed = Arrays.stream(shardIds.split(",")).map(String::trim).toList();
+        if (parsed.stream().anyMatch(String::isBlank)) {
+            throw new IllegalArgumentException("Invalid shard.ids '" + shardIds + "', expected a comma-separated list of non-empty shard ids");
+        }
+        return parsed;
+    }
+
+    /**
+     * Picks the shard for a change event key; the hash is deterministic across pods and restarts, so a row
+     * always maps to the same shard. Empty when sharding is disabled or the event has no key.
+     */
+    public Optional<String> resolveShardId(byte[] key) {
+        if (key == null || shardIds.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(shardIds.get(Math.floorMod(Arrays.hashCode(key), shardIds.size())));
     }
 
     /**
@@ -132,6 +169,10 @@ public class LibstreamingChangeConsumerConfig {
 
     public String getLaneType() {
         return laneType;
+    }
+
+    public List<String> getShardIds() {
+        return shardIds;
     }
 
     public int getWaitMessageDeliveryTimeout() {

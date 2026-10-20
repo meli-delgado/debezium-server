@@ -6,6 +6,8 @@ debezium.sink.libstreaming.stream.id.routes=<CHANGEME>.public.orders=orders-stre
 debezium.sink.libstreaming.streaming.instance=<CHANGEME>
 debezium.sink.libstreaming.datacenter=us1.staging.dog
 debezium.sink.libstreaming.lane.type=default
+# Shard ids of the target streams; each row is pinned to one shard by hashing its key. Leave empty to write unsharded.
+debezium.sink.libstreaming.shard.ids=0,1,2
 
 debezium.source.connector.class=io.debezium.connector.postgresql.PostgresConnector
 debezium.source.database.hostname=<CHANGEME>
