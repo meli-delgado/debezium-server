@@ -65,8 +65,7 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
         io.debezium.config.Configuration configuration = io.debezium.config.Configuration.from(getConfigSubset(mpConfig, PROP_PREFIX));
         this.config = new LibstreamingChangeConsumerConfig(configuration);
 
-        // TODO: temporary DEBUG logging for diagnosis; revert to Observability.noop().
-        Libstreaming.init(podFromEnv(), Observability.forTests(Observability.Level.DEBUG));
+        Libstreaming.init(podFromEnv(), Observability.noop());
 
         Set<String> streamIds = new HashSet<>(config.getStreamIdRoutes().values());
         streamIds.add(config.getStreamId());
