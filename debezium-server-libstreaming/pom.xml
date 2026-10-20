@@ -33,7 +33,7 @@
         <dependency>
             <groupId>com.dd.libstreaming</groupId>
             <artifactId>libstreaming</artifactId>
-            <version>d06650af</version>
+            <version>bd49e9b6</version>
         </dependency>
 
         <!-- Testing -->
