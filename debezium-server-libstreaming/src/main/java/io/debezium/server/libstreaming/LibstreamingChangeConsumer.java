@@ -65,7 +65,7 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
         io.debezium.config.Configuration configuration = io.debezium.config.Configuration.from(getConfigSubset(mpConfig, PROP_PREFIX));
         this.config = new LibstreamingChangeConsumerConfig(configuration);
 
-        Libstreaming.init(new Pod("", "", "", "", "", "", ""), Observability.noop());
+        Libstreaming.init(podFromEnv(), Observability.noop());
 
         Set<String> streamIds = new HashSet<>(config.getStreamIdRoutes().values());
         streamIds.add(config.getStreamId());
@@ -75,6 +75,22 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
         }
 
         LOGGER.info("consumer started, publishing to streams {} via streaming instance '{}'", streamProducersByStreamId.keySet(), config.getStreamingInstance());
+    }
+
+    // Values are injected through the Kubernetes Downward API; unset vars fall back to "" as libstreaming expects.
+    private static Pod podFromEnv() {
+        return new Pod(
+                envOrEmpty("POD_NAME"),
+                envOrEmpty("K8S_CLUSTER_NAME"),
+                envOrEmpty("AVAILABILITY_ZONE"),
+                envOrEmpty("POD_IP"),
+                envOrEmpty("NODE_NAME"),
+                envOrEmpty("POD_NAMESPACE"),
+                envOrEmpty("POD_SERVICE_ACCOUNT"));
+    }
+
+    private static String envOrEmpty(String name) {
+        return Optional.ofNullable(System.getenv(name)).orElse("");
     }
 
     private StreamProducer createReadyStreamProducer(String streamId) {
