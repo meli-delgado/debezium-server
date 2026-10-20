@@ -5,7 +5,6 @@
  */
 package io.debezium.server.libstreaming;
 
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -141,8 +140,7 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
                 resolvedStreamIds.add(streamId);
                 StreamProducer streamProducer = streamProducersByStreamId.get(streamId);
 
-                deliveryFutures.add(streamProducer.write(config.getLaneType(), getBytes(record.key()), ByteBuffer.wrap(getBytes(record.value())), Optional.of(headers),
-                        Optional.empty()));
+                deliveryFutures.add(streamProducer.write(getBytes(record.value()), config.getLaneType(), Optional.of(headers), Optional.empty(), Optional.empty()));
             }
             catch (Exception e) {
                 throw new DebeziumException(e);
