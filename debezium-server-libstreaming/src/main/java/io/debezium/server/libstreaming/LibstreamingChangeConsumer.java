@@ -142,6 +142,13 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
                 resolvedStreamIds.add(streamId);
                 StreamProducer streamProducer = streamProducersByStreamId.get(streamId);
 
+                // Only reachable when tombstones.on.delete is explicitly enabled; a stream has no use for them.
+                if (record.value() == null) {
+                    LOGGER.trace("Skipping tombstone event for key '{}'", asString(record.key()));
+                    deliveryFutures.add(CompletableFuture.completedFuture(null));
+                    continue;
+                }
+
                 Optional<String> shardId = config.resolveShardId(record.key() == null ? null : getBytes(record.key()));
 
                 deliveryFutures.add(streamProducer.write(getBytes(record.value()), config.getLaneType(), Optional.of(headers), Optional.empty(), shardId));
@@ -176,6 +183,11 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
         }
 
         committer.markBatchFinished();
+    }
+
+    @Override
+    public boolean supportsTombstoneEvents() {
+        return false;
     }
 
     private Headers convertToLibstreamingHeaders(ChangeEvent<Object, Object> record) {
