@@ -133,6 +133,7 @@ public class LibstreamingChangeConsumerTest {
         Write write = captureWrites(1).get(0);
         assertThat(write.payload()).isEmpty();
         assertThat(((Headers.Value.StringValue) write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_HEADER)).get()).isEqualTo("true");
+        assertThat(((Headers.Value.StringValue) write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_KEY_HEADER)).get()).isEqualTo(KEY);
         assertThat(committer.processed).containsExactly(tombstone);
         assertThat(committer.batchFinished).isTrue();
     }
@@ -146,6 +147,7 @@ public class LibstreamingChangeConsumerTest {
         Write write = captureWrites(1).get(0);
         assertThat(new String(write.payload(), StandardCharsets.UTF_8)).isEqualTo(value);
         assertThat(write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_HEADER)).isNull();
+        assertThat(write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_KEY_HEADER)).isNull();
     }
 
     @Test

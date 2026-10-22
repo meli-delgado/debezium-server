@@ -56,6 +56,7 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
     private LibstreamingChangeConsumerConfig config;
 
     static final String TOMBSTONE_HEADER = "__debezium.tombstone";
+    static final String TOMBSTONE_KEY_HEADER = "__debezium.key";
 
     private static final byte[] EMPTY_PAYLOAD = new byte[0];
 
@@ -182,7 +183,8 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
         committer.markBatchFinished();
     }
 
-    // libstreaming's Java API cannot publish a null payload, so tombstones go out empty and flagged by TOMBSTONE_HEADER.
+    // libstreaming's Java API cannot publish a null payload, so tombstones go out empty, flagged by TOMBSTONE_HEADER
+    // and carrying their key in TOMBSTONE_KEY_HEADER since the stream has no record key.
     private byte[] payloadOf(ChangeEvent<Object, Object> record) {
         return record.value() == null ? EMPTY_PAYLOAD : getBytes(record.value());
     }
@@ -194,6 +196,9 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
         }
         if (record.value() == null) {
             headers.set(TOMBSTONE_HEADER, new Headers.Value.StringValue("true"));
+            if (record.key() != null) {
+                headers.set(TOMBSTONE_KEY_HEADER, new Headers.Value.StringValue(asString(record.key())));
+            }
         }
         return headers;
     }
