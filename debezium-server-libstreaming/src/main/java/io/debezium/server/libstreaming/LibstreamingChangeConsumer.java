@@ -55,6 +55,10 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
 
     private LibstreamingChangeConsumerConfig config;
 
+    static final String TOMBSTONE_HEADER = "__debezium.tombstone";
+
+    private static final byte[] EMPTY_PAYLOAD = new byte[0];
+
     private final Map<String, StreamProducer> streamProducersByStreamId = new HashMap<>();
 
     @PostConstruct
@@ -63,7 +67,6 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
 
         io.debezium.config.Configuration configuration = io.debezium.config.Configuration.from(getConfigSubset(mpConfig, PROP_PREFIX));
         this.config = new LibstreamingChangeConsumerConfig(configuration);
-        DeleteHandlingGuard.rejectNullValuedDeletes(name -> mpConfig.getOptionalValue(name, String.class));
 
         Libstreaming.init(podFromEnv(), Observability.dogstatsdUnix(Observability.Level.INFO, "/var/run/datadog-agent/statsd.sock"));
 
@@ -143,16 +146,9 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
                 resolvedStreamIds.add(streamId);
                 StreamProducer streamProducer = streamProducersByStreamId.get(streamId);
 
-                // Only real tombstones get here (they follow their delete event); null-valued deletes are rejected at startup.
-                if (record.value() == null) {
-                    LOGGER.trace("Skipping tombstone event for destination '{}'", record.destination());
-                    deliveryFutures.add(CompletableFuture.completedFuture(null));
-                    continue;
-                }
-
                 Optional<String> shardId = config.resolveShardId(record.key() == null ? null : getBytes(record.key()));
 
-                deliveryFutures.add(streamProducer.write(getBytes(record.value()), config.getLaneType(), Optional.of(headers), Optional.empty(), shardId));
+                deliveryFutures.add(streamProducer.write(payloadOf(record), config.getLaneType(), Optional.of(headers), Optional.empty(), shardId));
             }
             catch (Exception e) {
                 throw new DebeziumException(e);
@@ -186,15 +182,18 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
         committer.markBatchFinished();
     }
 
-    @Override
-    public boolean supportsTombstoneEvents() {
-        return false;
+    // libstreaming's Java API cannot publish a null payload, so tombstones go out empty and flagged by TOMBSTONE_HEADER.
+    private byte[] payloadOf(ChangeEvent<Object, Object> record) {
+        return record.value() == null ? EMPTY_PAYLOAD : getBytes(record.value());
     }
 
     private Headers convertToLibstreamingHeaders(ChangeEvent<Object, Object> record) {
         Headers headers = Headers.empty();
         for (Header<Object> header : record.headers()) {
             headers.set(header.getKey(), new Headers.Value.StringValue(asString(header.getValue())));
+        }
+        if (record.value() == null) {
+            headers.set(TOMBSTONE_HEADER, new Headers.Value.StringValue("true"));
         }
         return headers;
     }

@@ -6,13 +6,27 @@
 package io.debezium.server.libstreaming;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import com.dd.libstreaming.streamconsumer.Headers;
+import com.dd.libstreaming.streamproducer.StreamProducer;
 
 import io.debezium.config.Configuration;
 import io.debezium.engine.ChangeEvent;
@@ -20,6 +34,8 @@ import io.debezium.engine.DebeziumEngine.Offsets;
 import io.debezium.engine.DebeziumEngine.RecordCommitter;
 
 public class LibstreamingChangeConsumerTest {
+
+    private static final String KEY = "{\"id\":1}";
 
     private record TestChangeEvent(Object key, Object value, String destination) implements ChangeEvent<Object, Object> {
         @Override
@@ -53,35 +69,92 @@ public class LibstreamingChangeConsumerTest {
         }
     }
 
-    // start() would initialize libstreaming, so inject only the parsed config.
-    private static LibstreamingChangeConsumer consumerWithConfig() throws Exception {
-        LibstreamingChangeConsumer consumer = new LibstreamingChangeConsumer();
-        LibstreamingChangeConsumerConfig config = new LibstreamingChangeConsumerConfig(Configuration.from(Map.of(
+    private StreamProducer streamProducer;
+    private LibstreamingChangeConsumer consumer;
+    private RecordingCommitter committer;
+
+    @BeforeEach
+    @SuppressWarnings("unchecked")
+    public void setUp() throws Exception {
+        streamProducer = mock(StreamProducer.class);
+        when(streamProducer.write(any(byte[].class), anyString(), any(), any(), any())).thenReturn(CompletableFuture.completedFuture(null));
+
+        // start() would initialize libstreaming, so inject the parsed config and a mocked producer instead.
+        consumer = new LibstreamingChangeConsumer();
+        setField("config", new LibstreamingChangeConsumerConfig(Configuration.from(Map.of(
                 LibstreamingChangeConsumerConfig.STREAM_ID.name(), "default-stream",
                 LibstreamingChangeConsumerConfig.STREAMING_INSTANCE.name(), "evp",
-                LibstreamingChangeConsumerConfig.DATACENTER.name(), "us1.staging.dog")));
-        Field configField = LibstreamingChangeConsumer.class.getDeclaredField("config");
-        configField.setAccessible(true);
-        configField.set(consumer, config);
-        return consumer;
+                LibstreamingChangeConsumerConfig.DATACENTER.name(), "us1.staging.dog",
+                LibstreamingChangeConsumerConfig.SHARD_IDS.name(), "0,1,2"))));
+        ((Map<String, StreamProducer>) getField("streamProducersByStreamId")).put("default-stream", streamProducer);
+        committer = new RecordingCommitter();
+    }
+
+    private void setField(String name, Object value) throws Exception {
+        Field field = LibstreamingChangeConsumer.class.getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(consumer, value);
+    }
+
+    private Object getField(String name) throws Exception {
+        Field field = LibstreamingChangeConsumer.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(consumer);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Write> captureWrites(int count) {
+        ArgumentCaptor<byte[]> payloads = ArgumentCaptor.forClass(byte[].class);
+        ArgumentCaptor<Optional<Headers>> headers = ArgumentCaptor.forClass(Optional.class);
+        ArgumentCaptor<Optional<String>> shardIds = ArgumentCaptor.forClass(Optional.class);
+        verify(streamProducer, times(count)).write(payloads.capture(), anyString(), headers.capture(), any(), shardIds.capture());
+
+        List<Write> writes = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            writes.add(new Write(payloads.getAllValues().get(i), headers.getAllValues().get(i).orElseThrow(), shardIds.getAllValues().get(i)));
+        }
+        return writes;
+    }
+
+    private record Write(byte[] payload, Headers headers, Optional<String> shardId) {
     }
 
     @Test
-    public void declaresNoTombstoneSupportSoTheEngineDisablesThem() {
-        assertThat(new LibstreamingChangeConsumer().supportsTombstoneEvents()).isFalse();
+    public void keepsTombstoneEventsEnabledInTheEngine() {
+        assertThat(consumer.supportsTombstoneEvents()).isTrue();
     }
 
     @Test
-    public void skipsTombstonesAndStillMarksThemProcessed() throws Exception {
-        LibstreamingChangeConsumer consumer = consumerWithConfig();
-        RecordingCommitter committer = new RecordingCommitter();
-        List<ChangeEvent<Object, Object>> tombstones = List.of(
-                new TestChangeEvent("{\"id\":1}", null, "myserver.public.orders"),
-                new TestChangeEvent(null, null, "myserver.public.orders"));
+    public void publishesTombstoneAsEmptyPayloadFlaggedByHeader() throws Exception {
+        ChangeEvent<Object, Object> tombstone = new TestChangeEvent(KEY, null, "myserver.public.orders");
 
-        consumer.handleBatch(tombstones, committer);
+        consumer.handleBatch(List.of(tombstone), committer);
 
-        assertThat(committer.processed).containsExactlyElementsOf(tombstones);
+        Write write = captureWrites(1).get(0);
+        assertThat(write.payload()).isEmpty();
+        assertThat(((Headers.Value.StringValue) write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_HEADER)).get()).isEqualTo("true");
+        assertThat(committer.processed).containsExactly(tombstone);
         assertThat(committer.batchFinished).isTrue();
+    }
+
+    @Test
+    public void publishesRegularEventsWithoutTheTombstoneHeader() throws Exception {
+        String value = "{\"id\":1,\"op\":\"u\"}";
+
+        consumer.handleBatch(List.of(new TestChangeEvent(KEY, value, "myserver.public.orders")), committer);
+
+        Write write = captureWrites(1).get(0);
+        assertThat(new String(write.payload(), StandardCharsets.UTF_8)).isEqualTo(value);
+        assertThat(write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_HEADER)).isNull();
+    }
+
+    @Test
+    public void routesATombstoneToTheSameShardAsItsDeleteEvent() throws Exception {
+        consumer.handleBatch(List.of(
+                new TestChangeEvent(KEY, "{\"id\":1,\"op\":\"d\"}", "myserver.public.orders"),
+                new TestChangeEvent(KEY, null, "myserver.public.orders")), committer);
+
+        List<Write> writes = captureWrites(2);
+        assertThat(writes.get(0).shardId()).isPresent().isEqualTo(writes.get(1).shardId());
     }
 }
