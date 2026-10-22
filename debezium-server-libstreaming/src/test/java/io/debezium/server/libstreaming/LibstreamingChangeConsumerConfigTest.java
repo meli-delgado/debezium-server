@@ -98,6 +98,13 @@ public class LibstreamingChangeConsumerConfigTest {
     }
 
     @Test
+    public void rejectsDuplicateRouteDestinations() {
+        assertThatThrownBy(() -> configWith("default-stream", "myserver.public.orders=orders-stream, myserver.public.orders=other-stream"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("myserver.public.orders");
+    }
+
+    @Test
     public void ignoresWhitespaceAroundRouteEntries() {
         LibstreamingChangeConsumerConfig config = configWith("default-stream", " myserver.public.orders = orders-stream , myserver.public.customers=customers-stream ");
 

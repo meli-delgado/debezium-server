@@ -116,7 +116,10 @@ public class LibstreamingChangeConsumerConfig {
             if (destinationAndStreamId.length != 2 || destinationAndStreamId[0].isBlank() || destinationAndStreamId[1].isBlank()) {
                 throw new IllegalArgumentException("Invalid stream.id.routes entry '" + entry + "', expected format <destination>=<streamId>");
             }
-            parsed.put(destinationAndStreamId[0].trim(), destinationAndStreamId[1].trim());
+            String destination = destinationAndStreamId[0].trim();
+            if (parsed.putIfAbsent(destination, destinationAndStreamId[1].trim()) != null) {
+                throw new IllegalArgumentException("Duplicate stream.id.routes entry for destination '" + destination + "'");
+            }
         }
         return parsed;
     }
