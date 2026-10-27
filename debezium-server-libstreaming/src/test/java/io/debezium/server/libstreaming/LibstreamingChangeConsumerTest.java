@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -119,6 +120,13 @@ public class LibstreamingChangeConsumerTest {
     private record Write(byte[] payload, Headers headers, Optional<String> shardId) {
     }
 
+    private static byte[] keyHeader(Write write) {
+        ByteBuffer key = ((Headers.Value.BytesValue) write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_KEY_HEADER)).get();
+        byte[] bytes = new byte[key.remaining()];
+        key.get(bytes);
+        return bytes;
+    }
+
     @Test
     public void keepsTombstoneEventsEnabledInTheEngine() {
         assertThat(consumer.supportsTombstoneEvents()).isTrue();
@@ -133,7 +141,9 @@ public class LibstreamingChangeConsumerTest {
         Write write = captureWrites(1).get(0);
         assertThat(write.payload()).isEmpty();
         assertThat(((Headers.Value.StringValue) write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_HEADER)).get()).isEqualTo("true");
-        assertThat(((Headers.Value.StringValue) write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_KEY_HEADER)).get()).isEqualTo(KEY);
+        assertThat(keyHeader(write)).isEqualTo(KEY.getBytes(StandardCharsets.UTF_8));
+        assertThat(((Headers.Value.StringValue) write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_DESTINATION_HEADER)).get())
+                .isEqualTo("myserver.public.orders");
         assertThat(committer.processed).containsExactly(tombstone);
         assertThat(committer.batchFinished).isTrue();
     }
@@ -148,6 +158,16 @@ public class LibstreamingChangeConsumerTest {
         assertThat(new String(write.payload(), StandardCharsets.UTF_8)).isEqualTo(value);
         assertThat(write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_HEADER)).isNull();
         assertThat(write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_KEY_HEADER)).isNull();
+        assertThat(write.headers().get(LibstreamingChangeConsumer.TOMBSTONE_DESTINATION_HEADER)).isNull();
+    }
+
+    @Test
+    public void preservesBinaryTombstoneKeysByteForByte() throws Exception {
+        byte[] binaryKey = { 0x00, (byte) 0xC3, (byte) 0x28, (byte) 0xFF };
+
+        consumer.handleBatch(List.of(new TestChangeEvent(binaryKey, null, "myserver.public.orders")), committer);
+
+        assertThat(keyHeader(captureWrites(1).get(0))).isEqualTo(binaryKey);
     }
 
     @Test
