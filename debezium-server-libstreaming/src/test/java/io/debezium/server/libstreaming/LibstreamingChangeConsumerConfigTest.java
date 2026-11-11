@@ -17,13 +17,13 @@ import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
+import io.debezium.DebeziumException;
 import io.debezium.config.Configuration;
 
 public class LibstreamingChangeConsumerConfigTest {
 
-    private LibstreamingChangeConsumerConfig configWith(String streamId, String streamIdRoutes) {
+    private LibstreamingChangeConsumerConfig configWith(String streamIdRoutes) {
         Map<String, String> props = new HashMap<>();
-        props.put(LibstreamingChangeConsumerConfig.STREAM_ID.name(), streamId);
         props.put(LibstreamingChangeConsumerConfig.STREAMING_INSTANCE.name(), "evp");
         props.put(LibstreamingChangeConsumerConfig.DATACENTER.name(), "us1.staging.dog");
         if (streamIdRoutes != null) {
@@ -34,7 +34,7 @@ public class LibstreamingChangeConsumerConfigTest {
 
     private LibstreamingChangeConsumerConfig configWithShardIds(String shardIds) {
         Map<String, String> props = new HashMap<>();
-        props.put(LibstreamingChangeConsumerConfig.STREAM_ID.name(), "default-stream");
+        props.put(LibstreamingChangeConsumerConfig.STREAM_ID_ROUTES.name(), "myserver.public.orders=orders-stream");
         props.put(LibstreamingChangeConsumerConfig.STREAMING_INSTANCE.name(), "evp");
         props.put(LibstreamingChangeConsumerConfig.DATACENTER.name(), "us1.staging.dog");
         props.put(LibstreamingChangeConsumerConfig.SHARD_IDS.name(), shardIds);
@@ -47,7 +47,7 @@ public class LibstreamingChangeConsumerConfigTest {
 
     @Test
     public void resolvesRoutedDestinationToItsMappedStreamId() {
-        LibstreamingChangeConsumerConfig config = configWith("default-stream",
+        LibstreamingChangeConsumerConfig config = configWith(
                 "myserver.public.orders=orders-stream,myserver.public.customers=customers-stream");
 
         assertThat(config.resolveStreamId("myserver.public.orders")).isEqualTo("orders-stream");
@@ -55,23 +55,31 @@ public class LibstreamingChangeConsumerConfigTest {
     }
 
     @Test
-    public void resolvesUnroutedDestinationToDefaultStreamId() {
-        LibstreamingChangeConsumerConfig config = configWith("default-stream", "myserver.public.orders=orders-stream");
-
-        assertThat(config.resolveStreamId("myserver.public.line_items")).isEqualTo("default-stream");
+    public void rejectsMissingRoutes() {
+        assertThatThrownBy(() -> configWith(null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("stream.id.routes must not be empty");
     }
 
     @Test
-    public void resolvesEveryDestinationToDefaultStreamIdWhenNoRoutesConfigured() {
-        LibstreamingChangeConsumerConfig config = configWith("default-stream", null);
+    public void rejectsBlankRoutes() {
+        assertThatThrownBy(() -> configWith("  "))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("stream.id.routes must not be empty");
+    }
 
-        assertThat(config.resolveStreamId("myserver.public.orders")).isEqualTo("default-stream");
-        assertThat(config.getStreamIdRoutes()).isEmpty();
+    @Test
+    public void rejectsUnroutedDestination() {
+        LibstreamingChangeConsumerConfig config = configWith("myserver.public.orders=orders-stream");
+
+        assertThatThrownBy(() -> config.resolveStreamId("myserver.public.line_items"))
+                .isInstanceOf(DebeziumException.class)
+                .hasMessageContaining("myserver.public.line_items");
     }
 
     @Test
     public void routesToTheSameStreamIdCanShareMultipleDestinations() {
-        LibstreamingChangeConsumerConfig config = configWith("default-stream",
+        LibstreamingChangeConsumerConfig config = configWith(
                 "myserver.public.orders=orders-stream,myserver.public.line_items=orders-stream");
 
         assertThat(config.resolveStreamId("myserver.public.orders")).isEqualTo("orders-stream");
@@ -80,33 +88,33 @@ public class LibstreamingChangeConsumerConfigTest {
 
     @Test
     public void rejectsRouteEntryMissingEqualsSign() {
-        assertThatThrownBy(() -> configWith("default-stream", "myserver.public.orders"))
+        assertThatThrownBy(() -> configWith("myserver.public.orders"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("myserver.public.orders");
     }
 
     @Test
     public void rejectsRouteEntryWithBlankDestination() {
-        assertThatThrownBy(() -> configWith("default-stream", "=orders-stream"))
+        assertThatThrownBy(() -> configWith("=orders-stream"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     public void rejectsRouteEntryWithBlankStreamId() {
-        assertThatThrownBy(() -> configWith("default-stream", "myserver.public.orders="))
+        assertThatThrownBy(() -> configWith("myserver.public.orders="))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     public void rejectsDuplicateRouteDestinations() {
-        assertThatThrownBy(() -> configWith("default-stream", "myserver.public.orders=orders-stream, myserver.public.orders=other-stream"))
+        assertThatThrownBy(() -> configWith("myserver.public.orders=orders-stream, myserver.public.orders=other-stream"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("myserver.public.orders");
     }
 
     @Test
     public void ignoresWhitespaceAroundRouteEntries() {
-        LibstreamingChangeConsumerConfig config = configWith("default-stream", " myserver.public.orders = orders-stream , myserver.public.customers=customers-stream ");
+        LibstreamingChangeConsumerConfig config = configWith(" myserver.public.orders = orders-stream , myserver.public.customers=customers-stream ");
 
         assertThat(config.resolveStreamId("myserver.public.orders")).isEqualTo("orders-stream");
         assertThat(config.resolveStreamId("myserver.public.customers")).isEqualTo("customers-stream");
@@ -139,7 +147,7 @@ public class LibstreamingChangeConsumerConfigTest {
 
     @Test
     public void resolvesNoShardWhenShardIdsNotConfigured() {
-        LibstreamingChangeConsumerConfig config = configWith("default-stream", null);
+        LibstreamingChangeConsumerConfig config = configWith("myserver.public.orders=orders-stream");
 
         assertThat(config.resolveShardId(key("{\"id\":42}"))).isEmpty();
         assertThat(config.getShardIds()).isEmpty();

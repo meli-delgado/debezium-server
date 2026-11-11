@@ -6,9 +6,11 @@
 package io.debezium.server.libstreaming;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -29,6 +31,7 @@ import org.mockito.ArgumentCaptor;
 import com.dd.libstreaming.streamconsumer.Headers;
 import com.dd.libstreaming.streamproducer.StreamProducer;
 
+import io.debezium.DebeziumException;
 import io.debezium.config.Configuration;
 import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine.Offsets;
@@ -71,24 +74,33 @@ public class LibstreamingChangeConsumerTest {
     }
 
     private StreamProducer streamProducer;
+    private StreamProducer customersProducer;
     private LibstreamingChangeConsumer consumer;
     private RecordingCommitter committer;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
     public void setUp() throws Exception {
-        streamProducer = mock(StreamProducer.class);
-        when(streamProducer.write(any(byte[].class), anyString(), any(), any(), any())).thenReturn(CompletableFuture.completedFuture(null));
+        streamProducer = mockProducer();
+        customersProducer = mockProducer();
 
         // start() would initialize libstreaming, so inject the parsed config and a mocked producer instead.
         consumer = new LibstreamingChangeConsumer();
         setField("config", new LibstreamingChangeConsumerConfig(Configuration.from(Map.of(
-                LibstreamingChangeConsumerConfig.STREAM_ID.name(), "default-stream",
+                LibstreamingChangeConsumerConfig.STREAM_ID_ROUTES.name(), "myserver.public.orders=orders-stream,myserver.public.customers=customers-stream",
                 LibstreamingChangeConsumerConfig.STREAMING_INSTANCE.name(), "evp",
                 LibstreamingChangeConsumerConfig.DATACENTER.name(), "us1.staging.dog",
                 LibstreamingChangeConsumerConfig.SHARD_IDS.name(), "0,1,2"))));
-        ((Map<String, StreamProducer>) getField("streamProducersByStreamId")).put("default-stream", streamProducer);
+        Map<String, StreamProducer> producersByStreamId = (Map<String, StreamProducer>) getField("streamProducersByStreamId");
+        producersByStreamId.put("orders-stream", streamProducer);
+        producersByStreamId.put("customers-stream", customersProducer);
         committer = new RecordingCommitter();
+    }
+
+    private static StreamProducer mockProducer() {
+        StreamProducer producer = mock(StreamProducer.class);
+        when(producer.write(any(byte[].class), anyString(), any(), any(), any())).thenReturn(CompletableFuture.completedFuture(null));
+        return producer;
     }
 
     private void setField(String name, Object value) throws Exception {
@@ -178,5 +190,33 @@ public class LibstreamingChangeConsumerTest {
 
         List<Write> writes = captureWrites(2);
         assertThat(writes.get(0).shardId()).isPresent().isEqualTo(writes.get(1).shardId());
+    }
+
+    @Test
+    public void routesEachDestinationToItsMappedStream() throws Exception {
+        consumer.handleBatch(List.of(
+                new TestChangeEvent(KEY, "{\"id\":1}", "myserver.public.orders"),
+                new TestChangeEvent(KEY, "{\"id\":2}", "myserver.public.customers"),
+                new TestChangeEvent(KEY, "{\"id\":3}", "myserver.public.orders")), committer);
+
+        verify(streamProducer, times(2)).write(any(byte[].class), anyString(), any(), any(), any());
+        verify(customersProducer, times(1)).write(any(byte[].class), anyString(), any(), any(), any());
+        assertThat(committer.processed).hasSize(3);
+    }
+
+    @Test
+    public void failsBatchOnUnroutedDestinationWithoutMarkingAnyRecordProcessed() {
+        List<ChangeEvent<Object, Object>> batch = List.of(
+                new TestChangeEvent(KEY, "{\"id\":1}", "myserver.public.orders"),
+                new TestChangeEvent(KEY, "{\"id\":2}", "myserver.public.unrouted"));
+
+        assertThatThrownBy(() -> consumer.handleBatch(batch, committer))
+                .isInstanceOf(DebeziumException.class)
+                .hasMessageContaining("myserver.public.unrouted");
+
+        assertThat(committer.processed).isEmpty();
+        assertThat(committer.batchFinished).isFalse();
+        verify(streamProducer, never()).write(any(byte[].class), anyString(), any(), any(), any());
+        verify(customersProducer, never()).write(any(byte[].class), anyString(), any(), any(), any());
     }
 }

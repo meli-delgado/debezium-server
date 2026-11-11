@@ -8,7 +8,6 @@ package io.debezium.server.libstreaming;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -73,10 +72,7 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
 
         Libstreaming.init(podFromEnv(), Observability.dogstatsdUnix(Observability.Level.INFO, "/var/run/datadog-agent/statsd.sock"));
 
-        Set<String> streamIds = new HashSet<>(config.getStreamIdRoutes().values());
-        streamIds.add(config.getStreamId());
-
-        for (String streamId : streamIds) {
+        for (String streamId : Set.copyOf(config.getStreamIdRoutes().values())) {
             streamProducersByStreamId.put(streamId, createReadyStreamProducer(streamId));
         }
 
@@ -137,25 +133,12 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
                             final RecordCommitter<ChangeEvent<Object, Object>> committer)
             throws InterruptedException {
 
+        // Resolve every route up front so an unrouted destination fails the batch before anything is published.
+        final List<String> resolvedStreamIds = records.stream().map(record -> config.resolveStreamId(record.destination())).toList();
         final List<CompletableFuture<Void>> deliveryFutures = new ArrayList<>(records.size());
-        final List<String> resolvedStreamIds = new ArrayList<>(records.size());
 
-        for (ChangeEvent<Object, Object> record : records) {
-            try {
-                LOGGER.trace("Received event for destination '{}'", record.destination());
-                Headers headers = convertToLibstreamingHeaders(record);
-
-                String streamId = config.resolveStreamId(record.destination());
-                resolvedStreamIds.add(streamId);
-                StreamProducer streamProducer = streamProducersByStreamId.get(streamId);
-
-                Optional<String> shardId = config.resolveShardId(record.key() == null ? null : getBytes(record.key()));
-
-                deliveryFutures.add(streamProducer.write(payloadOf(record), config.getLaneType(), Optional.of(headers), Optional.empty(), shardId));
-            }
-            catch (Exception e) {
-                throw new DebeziumException(e);
-            }
+        for (int i = 0; i < records.size(); i++) {
+            deliveryFutures.add(publish(records.get(i), resolvedStreamIds.get(i)));
         }
 
         try {
@@ -183,6 +166,18 @@ public class LibstreamingChangeConsumer extends BaseChangeConsumer implements De
         }
 
         committer.markBatchFinished();
+    }
+
+    private CompletableFuture<Void> publish(ChangeEvent<Object, Object> record, String streamId) {
+        try {
+            LOGGER.trace("Received event for destination '{}'", record.destination());
+            Headers headers = convertToLibstreamingHeaders(record);
+            Optional<String> shardId = config.resolveShardId(record.key() == null ? null : getBytes(record.key()));
+            return streamProducersByStreamId.get(streamId).write(payloadOf(record), config.getLaneType(), Optional.of(headers), Optional.empty(), shardId);
+        }
+        catch (Exception e) {
+            throw new DebeziumException(e);
+        }
     }
 
     // libstreaming's Java API cannot publish a null payload, so tombstones go out empty, flagged by TOMBSTONE_HEADER,

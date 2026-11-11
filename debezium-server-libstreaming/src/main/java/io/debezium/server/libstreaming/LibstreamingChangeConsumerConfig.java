@@ -13,6 +13,7 @@ import java.util.Optional;
 
 import org.apache.kafka.common.config.ConfigDef;
 
+import io.debezium.DebeziumException;
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;
 
@@ -21,22 +22,14 @@ import io.debezium.config.Field;
  */
 public class LibstreamingChangeConsumerConfig {
 
-    public static final Field STREAM_ID = Field.create("stream.id")
-            .withDisplayName("Default stream id")
-            .withType(ConfigDef.Type.STRING)
-            .withWidth(ConfigDef.Width.MEDIUM)
-            .withImportance(ConfigDef.Importance.HIGH)
-            .withDescription("The libstreaming stream id to publish change events to when a source table has no entry in stream.id.routes.");
-
     public static final Field STREAM_ID_ROUTES = Field.create("stream.id.routes")
             .withDisplayName("Per-table stream id routes")
             .withType(ConfigDef.Type.STRING)
-            .withDefault("")
             .withWidth(ConfigDef.Width.LONG)
-            .withImportance(ConfigDef.Importance.MEDIUM)
-            .withDescription("Comma-separated list of destination=streamId pairs (e.g. myserver.public.orders=orders-stream) "
-                    + "routing a source table's change events to a specific libstreaming stream. "
-                    + "A destination without a match here falls back to stream.id.");
+            .withImportance(ConfigDef.Importance.HIGH)
+            .withDescription("Required comma-separated list of destination=streamId pairs (e.g. myserver.public.orders=orders-stream) "
+                    + "routing each captured table's change events to a libstreaming stream. It must cover every captured table, "
+                    + "including the signal collection; there is no fallback stream, and an unrouted destination fails the batch.");
 
     public static final Field STREAMING_INSTANCE = Field.create("streaming.instance")
             .withDisplayName("Streaming instance")
@@ -86,7 +79,6 @@ public class LibstreamingChangeConsumerConfig {
             .withImportance(ConfigDef.Importance.MEDIUM)
             .withDescription("Timeout in milliseconds to wait for the StreamProducer to pull in its initial assignments on startup.");
 
-    private final String streamId;
     private final Map<String, String> streamIdRoutes;
     private final String streamingInstance;
     private final String datacenter;
@@ -96,7 +88,6 @@ public class LibstreamingChangeConsumerConfig {
     private final int producerReadyTimeout;
 
     public LibstreamingChangeConsumerConfig(Configuration config) {
-        this.streamId = config.getString(STREAM_ID);
         this.streamIdRoutes = parseRoutes(config.getString(STREAM_ID_ROUTES));
         this.streamingInstance = config.getString(STREAMING_INSTANCE);
         this.datacenter = config.getString(DATACENTER);
@@ -107,10 +98,10 @@ public class LibstreamingChangeConsumerConfig {
     }
 
     private static Map<String, String> parseRoutes(String routes) {
-        Map<String, String> parsed = new HashMap<>();
         if (routes == null || routes.isBlank()) {
-            return parsed;
+            throw new IllegalArgumentException("stream.id.routes must not be empty, every captured table (including the signal collection) needs a route");
         }
+        Map<String, String> parsed = new HashMap<>();
         for (String entry : routes.split(",")) {
             String[] destinationAndStreamId = entry.trim().split("=", 2);
             if (destinationAndStreamId.length != 2 || destinationAndStreamId[0].isBlank() || destinationAndStreamId[1].isBlank()) {
@@ -121,7 +112,7 @@ public class LibstreamingChangeConsumerConfig {
                 throw new IllegalArgumentException("Duplicate stream.id.routes entry for destination '" + destination + "'");
             }
         }
-        return parsed;
+        return Map.copyOf(parsed);
     }
 
     private static List<String> parseShardIds(String shardIds) {
@@ -146,16 +137,10 @@ public class LibstreamingChangeConsumerConfig {
         return Optional.of(shardIds.get(Math.floorMod(Arrays.hashCode(key), shardIds.size())));
     }
 
-    /**
-     * Resolves the libstreaming stream id a source table's change events should be published to,
-     * falling back to {@link #getStreamId()} when {@code destination} has no entry in {@code stream.id.routes}.
-     */
+    /** Resolves the stream a destination publishes to; an unrouted destination is an error, never a default. */
     public String resolveStreamId(String destination) {
-        return streamIdRoutes.getOrDefault(destination, streamId);
-    }
-
-    public String getStreamId() {
-        return streamId;
+        return Optional.ofNullable(streamIdRoutes.get(destination))
+                .orElseThrow(() -> new DebeziumException("No stream.id.routes entry for destination '" + destination + "'; every captured table must be routed"));
     }
 
     public Map<String, String> getStreamIdRoutes() {
